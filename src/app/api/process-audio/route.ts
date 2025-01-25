@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
-import fs from "fs";
-import fsPromises from "fs/promises";
-import path from "path";
 import axios from "axios";
 import gtts from "gtts";
+import { v2 as cloudinary } from "cloudinary";
+import os from "os";
+import path from "path";
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 export async function POST(request: Request) {
   try {
@@ -25,23 +32,11 @@ export async function POST(request: Request) {
 
     const buffer = Buffer.concat(chunks);
 
-    // Ensure the public directory exists
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true });
-    }
-
-    // Save the recording file
-    const filePath = path.join(publicDir, "recording.webm");
-    console.log("Saving recording to:", filePath);
-    await fsPromises.writeFile(filePath, buffer);
-    console.log("Recording saved successfully.");
-
-    // Use a free API for speech-to-text (e.g., AssemblyAI)
+    // Use AssemblyAI API for speech-to-text
     const assembly = axios.create({
       baseURL: "https://api.assemblyai.com/v2",
       headers: {
-        authorization: process.env.NEXT_ASSEMBLY_API_KEY, // Your AssemblyAI API key
+        authorization: process.env.NEXT_ASSEMBLY_API_KEY, // Ensure this is set in Vercel
         "content-type": "application/json",
       },
     });
@@ -82,28 +77,39 @@ export async function POST(request: Request) {
     const chatbotResponseText = generateChatbotResponse(transcriptText);
 
     // Use gTTS for text-to-speech
-    const uniqueFileName = `response-${Date.now()}.mp3`; // Unique file name
-    const audioFilePath = path.join(publicDir, uniqueFileName);
-    console.log("Saving response audio to:", audioFilePath);
-
-    await new Promise<void>((resolve, reject) => {
+    const audioFilePath = await new Promise<string>((resolve, reject) => {
       const gttsInstance = new gtts(chatbotResponseText, "en");
-      gttsInstance.save(audioFilePath, (err) => {
+
+      // Save the audio to a temporary file
+      const tempFilePath = path.join(os.tmpdir(), `response-${Date.now()}.mp3`);
+      gttsInstance.save(tempFilePath, (err) => {
         if (err) {
           console.error("Error saving gTTS audio:", err);
           reject(new Error("Failed to generate response audio."));
         } else {
-          console.log("Response audio saved successfully.");
-          resolve();
+          // Upload the audio file to Cloudinary
+          cloudinary.uploader.upload(
+            tempFilePath,
+            { resource_type: "video" }, // Use "video" for audio files
+            (error, result) => {
+              if (error) {
+                console.error("Error uploading to Cloudinary:", error);
+                reject(new Error("Failed to upload audio to Cloudinary."));
+              } else {
+                console.log("Audio uploaded to Cloudinary:", result?.secure_url);
+                resolve(result?.secure_url!); // Return the Cloudinary URL
+              }
+            }
+          );
         }
       });
     });
 
-    // Return both the text and audio URL
+    // Return both the text and Cloudinary audio URL
     return NextResponse.json(
       {
         text: chatbotResponseText,
-        audioUrl: `/${uniqueFileName}`,
+        audioUrl: audioFilePath,
       },
       {
         headers: {
@@ -112,9 +118,9 @@ export async function POST(request: Request) {
       }
     );
   } catch (error) {
-    console.error(error);
+    console.error("Error in /api/process-audio:", error);
     return NextResponse.json(
-      { message: "Internal server error" },
+      { message: "Failed to process audio. Please try again." },
       { status: 500 }
     );
   }
@@ -139,9 +145,6 @@ const generateChatbotResponse = (userInput: string): string => {
   }
   if (input.includes("your name") || input.includes("who are you")) {
     return "I'm your friendly chatbot here to assist with your queries!";
-  }
-  if (input.includes("help")) {
-    return "Sure! Let me know what you need help with.";
   }
   if (input.includes("bye") || input.includes("goodbye")) {
     return "Goodbye! Have a great day!";

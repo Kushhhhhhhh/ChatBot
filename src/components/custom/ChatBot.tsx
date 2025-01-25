@@ -31,25 +31,25 @@ const Chatbot = () => {
   const handleRecord = async () => {
     setIsRecording(true);
     setError(null); // Reset any previous errors
-
+  
     try {
       // Request access to the user's microphone
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
       const audioChunks: Blob[] = [];
-
+  
       // Collect audio data chunks
       mediaRecorder.ondataavailable = (event) => {
         audioChunks.push(event.data);
       };
-
+  
       // When recording stops, process the audio
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-
+  
         // Convert the Blob to an ArrayBuffer
         const arrayBuffer = await audioBlob.arrayBuffer();
-
+  
         // Send audio to the backend
         try {
           const response = await fetch("/api/process-audio", {
@@ -59,27 +59,27 @@ const Chatbot = () => {
               "Content-Type": "audio/webm",
             },
           });
-
+  
           if (!response.ok) {
             throw new Error(`Failed to process audio: ${response.statusText}`);
           }
-
-          const { text, audioUrl } = await response.json();
-
+  
+          const { text, audioBase64 } = await response.json();
+  
           // Add the chatbot's response to the chat history
           setChatHistory((prev) => [
             ...prev,
-            { text, audioUrl, isPlaying: false }, // Initialize isPlaying as false
+            { text, audioUrl: `data:audio/mp3;base64,${audioBase64}`, isPlaying: false },
           ]);
         } catch (err) {
           console.error("Error processing audio:", err);
           setError("Failed to process audio. Please try again.");
         }
       };
-
+  
       // Start recording
       mediaRecorder.start();
-
+  
       // Stop recording after 5 seconds
       setTimeout(() => {
         mediaRecorder.stop();
