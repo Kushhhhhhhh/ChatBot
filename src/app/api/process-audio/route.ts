@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import axios from "axios";
-import gtts from "gtts";
 import { v2 as cloudinary } from "cloudinary";
 import os from "os";
 import path from "path";
+import gtts from "gtts";
 
 // Configure Cloudinary
 cloudinary.config({
@@ -14,6 +14,7 @@ cloudinary.config({
 
 export async function POST(request: Request) {
   try {
+    // Read the audio file from the request body
     const chunks: Buffer[] = [];
     const reader = request.body?.getReader();
 
@@ -32,37 +33,30 @@ export async function POST(request: Request) {
 
     const buffer = Buffer.concat(chunks);
 
-    // Use AssemblyAI API for speech-to-text
+    // Step 1: Upload the audio file to AssemblyAI
     const assembly = axios.create({
       baseURL: "https://api.assemblyai.com/v2",
       headers: {
-        authorization: process.env.NEXT_ASSEMBLY_API_KEY, // Ensure this is set in Vercel
+        authorization: process.env.NEXT_ASSEMBLY_API_KEY,
         "content-type": "application/json",
       },
     });
 
-    // Upload the file to AssemblyAI
     const uploadResponse = await assembly.post("/upload", buffer);
-    console.log("AssemblyAI upload response:", uploadResponse.data);
-
     const audioUrl = uploadResponse.data.upload_url;
     console.log("Audio URL for transcription:", audioUrl);
 
-    // Transcribe the audio
+    // Step 2: Transcribe the audio using AssemblyAI
     const transcriptResponse = await assembly.post("/transcript", {
       audio_url: audioUrl,
     });
-    console.log("Transcript response:", transcriptResponse.data);
-
     const transcriptId = transcriptResponse.data.id;
     console.log("Transcript ID:", transcriptId);
 
     // Poll for transcription completion
     let transcriptText = "";
     while (true) {
-      const transcriptResult = await assembly.get(
-        `/transcript/${transcriptId}`
-      );
+      const transcriptResult = await assembly.get(`/transcript/${transcriptId}`);
       console.log("Transcript status:", transcriptResult.data.status);
 
       if (transcriptResult.data.status === "completed") {
@@ -70,57 +64,46 @@ export async function POST(request: Request) {
         console.log("Transcript text:", transcriptText);
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1 second before polling again
     }
 
-    // Generate a dynamic chatbot response
+    // Step 3: Generate a chatbot response
     const chatbotResponseText = generateChatbotResponse(transcriptText);
 
-    // Use gTTS for text-to-speech
-    const audioFilePath = await new Promise<string>((resolve, reject) => {
-      const gttsInstance = new gtts(chatbotResponseText, "en");
+    // Step 4: Convert the chatbot response to speech using gTTS
+    const tempFilePath = path.join(os.tmpdir(), `response-${Date.now()}.mp3`);
 
-      // Save the audio to a temporary file
-      const tempFilePath = path.join(os.tmpdir(), `response-${Date.now()}.mp3`);
+    await new Promise<void>((resolve, reject) => {
+      const gttsInstance = new gtts(chatbotResponseText, "en");
       gttsInstance.save(tempFilePath, (err) => {
         if (err) {
           console.error("Error saving gTTS audio:", err);
           reject(new Error("Failed to generate response audio."));
         } else {
-          // Upload the audio file to Cloudinary
-          cloudinary.uploader.upload(
-            tempFilePath,
-            { resource_type: "video" }, // Use "video" for audio files
-            (error, result) => {
-              if (error) {
-                console.error("Error uploading to Cloudinary:", error);
-                reject(new Error("Failed to upload audio to Cloudinary."));
-              } else {
-                console.log("Audio uploaded to Cloudinary:", result?.secure_url);
-                resolve(result?.secure_url!); // Return the Cloudinary URL
-              }
-            }
-          );
+          resolve();
         }
       });
     });
 
-    // Return both the text and Cloudinary audio URL
+    // Step 5: Upload the generated audio to Cloudinary
+    const cloudinaryResponse = await cloudinary.uploader.upload(tempFilePath, {
+      resource_type: "video", // Use "video" for audio files
+    });
+    const audioUrlCloudinary = cloudinaryResponse.secure_url;
+    console.log("Audio uploaded to Cloudinary:", audioUrlCloudinary);
+
+    // Step 6: Return the chatbot response text and Cloudinary audio URL
     return NextResponse.json(
       {
         text: chatbotResponseText,
-        audioUrl: audioFilePath,
+        audioUrl: audioUrlCloudinary,
       },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+      { status: 200 }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error in /api/process-audio:", error);
     return NextResponse.json(
-      { message: "Failed to process audio. Please try again." },
+      { message: "Failed to process audio. Please try again.", error: error.message },
       { status: 500 }
     );
   }
@@ -128,7 +111,6 @@ export async function POST(request: Request) {
 
 // Generate a dynamic chatbot response
 const generateChatbotResponse = (userInput: string): string => {
-  // Simple rule-based responses
   const input = userInput.toLowerCase();
 
   if (input.includes("hello") || input.includes("hi")) {
@@ -141,7 +123,7 @@ const generateChatbotResponse = (userInput: string): string => {
     return "You're welcome! Let me know if you need anything else.";
   }
   if (input.includes("time")) {
-    return `I'm not equipped to tell the time, but you can easily check your device's clock!`;
+    return "I'm not equipped to tell the time, but you can easily check your device's clock!";
   }
   if (input.includes("your name") || input.includes("who are you")) {
     return "I'm your friendly chatbot here to assist with your queries!";

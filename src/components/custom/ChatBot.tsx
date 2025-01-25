@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { FaPlay, FaPause, FaTrash } from "react-icons/fa";
 
 type ChatItem = {
   text: string;
   audioUrl: string;
-  isPlaying: boolean; 
+  isPlaying: boolean;
   audioInstance?: HTMLAudioElement;
 };
 
@@ -15,41 +15,28 @@ const Chatbot = () => {
   const [chatHistory, setChatHistory] = useState<ChatItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Load chat history from localStorage on component mount
-  useEffect(() => {
-    const savedChatHistory = localStorage.getItem("chatHistory");
-    if (savedChatHistory) {
-      setChatHistory(JSON.parse(savedChatHistory));
-    }
-  }, []);
-
-  // Save chat history to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem("chatHistory", JSON.stringify(chatHistory));
-  }, [chatHistory]);
-
   const handleRecord = async () => {
     setIsRecording(true);
     setError(null); // Reset any previous errors
-  
+
     try {
       // Request access to the user's microphone
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
       const audioChunks: Blob[] = [];
-  
+
       // Collect audio data chunks
       mediaRecorder.ondataavailable = (event) => {
         audioChunks.push(event.data);
       };
-  
+
       // When recording stops, process the audio
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-  
+
         // Convert the Blob to an ArrayBuffer
         const arrayBuffer = await audioBlob.arrayBuffer();
-  
+
         // Send audio to the backend
         try {
           const response = await fetch("/api/process-audio", {
@@ -59,27 +46,26 @@ const Chatbot = () => {
               "Content-Type": "audio/webm",
             },
           });
-  
+
           if (!response.ok) {
-            throw new Error(`Failed to process audio: ${response.statusText}`);
+            const errorData = await response.json();
+            throw new Error(errorData.message || "Failed to process audio.");
           }
-  
-          const { text, audioBase64 } = await response.json();
-  
-          // Add the chatbot's response to the chat history
+
+          const { text, audioUrl } = await response.json();
           setChatHistory((prev) => [
             ...prev,
-            { text, audioUrl: `data:audio/mp3;base64,${audioBase64}`, isPlaying: false },
+            { text, audioUrl, isPlaying: false },
           ]);
-        } catch (err) {
+        } catch (err: any) {
           console.error("Error processing audio:", err);
-          setError("Failed to process audio. Please try again.");
+          setError(err.message || "Failed to process audio. Please try again.");
         }
       };
-  
+
       // Start recording
       mediaRecorder.start();
-  
+
       // Stop recording after 5 seconds
       setTimeout(() => {
         mediaRecorder.stop();
@@ -137,42 +123,38 @@ const Chatbot = () => {
         {isRecording ? "Recording..." : "Start Recording"}
       </button>
 
-      {error && (
-        <p className="mt-4 text-red-500 text-center">{error}</p>
-      )}
+      {error && <p className="mt-4 text-red-500 text-center">{error}</p>}
 
       <div className="mt-8 w-full max-w-md">
-      {chatHistory.length === 0 ? (
-        
-        <div className="mt-8 text-center text-gray-600">
-          <p>No chat history yet. Start recording to see AI in action!</p>
-        </div>
-      ) : (
-        
-        <div className="mt-8 w-full max-w-md">
-          {chatHistory.map((chat, index) => (
-            <div key={index} className="mb-4 p-4 bg-[#fff0d9] rounded-lg shadow">
-              <p className="text-gray-800">{chat.text}</p>
-              <div className="flex justify-between gap-2 mt-4 p-2">
-                <button
-                  title="Play/Pause"
-                  onClick={() => toggleAudio(index)}
-                  className="p-3 bg-blue-500 text-white rounded-full hover:bg-blue-600 flex items-center justify-center"
-                >
-                  {chat.isPlaying ? <FaPause /> : <FaPlay />}
-                </button>
-                <button
-                  title="Delete"
-                  onClick={() => deleteResponse(index)}
-                  className="p-3 bg-red-500 text-white rounded-full hover:bg-red-600 flex items-center justify-center"
-                >
-                  <FaTrash />
-                </button>
+        {chatHistory.length === 0 ? (
+          <div className="mt-8 text-center text-gray-600">
+            <p>No chat history yet. Start recording to see AI in action!</p>
+          </div>
+        ) : (
+          <div className="mt-8 w-full max-w-md">
+            {chatHistory.map((chat, index) => (
+              <div key={index} className="mb-4 p-4 bg-[#fff0d9] rounded-lg shadow">
+                <p className="text-gray-800">{chat.text}</p>
+                <div className="flex justify-between gap-2 mt-4 p-2">
+                  <button
+                    title="Play/Pause"
+                    onClick={() => toggleAudio(index)}
+                    className="p-3 bg-blue-500 text-white rounded-full hover:bg-blue-600 flex items-center justify-center"
+                  >
+                    {chat.isPlaying ? <FaPause /> : <FaPlay />}
+                  </button>
+                  <button
+                    title="Delete"
+                    onClick={() => deleteResponse(index)}
+                    className="p-3 bg-red-500 text-white rounded-full hover:bg-red-600 flex items-center justify-center"
+                  >
+                    <FaTrash />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
